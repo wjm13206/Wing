@@ -2,6 +2,9 @@ const $base = window.BaseData || {};
 
 // Pjax
 class WingPjax {
+    headSelectorAttr = 'data-wing-pjax-head';
+    headAnchorAttr = 'data-wing-pjax-head-anchor';
+
     // 配置
     configure = {
         selector: ":not(.no-pjax) a, a:not([download])",
@@ -26,6 +29,7 @@ class WingPjax {
 
         // 初始化
         Object.assign(this.configure, configure);
+        this.initHeadManager();
         this.init();
     }
 
@@ -71,6 +75,151 @@ class WingPjax {
         });
     };
 
+    initHeadManager() {
+        if ( !document.head || document.head.querySelector(`[${this.headAnchorAttr}]`) ) return;
+        const nodes = this.getHeadNodes(document.head);
+        nodes.forEach(node => this.markHeadNode(node));
+        const anchor = document.createElement('meta');
+        anchor.setAttribute(this.headAnchorAttr, 'true');
+        if ( nodes.length ) {
+            nodes[nodes.length - 1].insertAdjacentElement('afterend', anchor);
+        } else {
+            document.head.appendChild(anchor);
+        }
+    };
+
+    ensureHeadAnchor() {
+        this.initHeadManager();
+        return document.head.querySelector(`[${this.headAnchorAttr}]`);
+    };
+
+    markHeadNode(node) {
+        node && node.setAttribute(this.headSelectorAttr, 'true');
+        return node;
+    };
+
+    getHeadNodes(head) {
+        return [...head.children].filter(node => !this.ignoreHeadNode(node));
+    };
+
+    getOwnedHeadNodes() {
+        return [...document.head.children].filter(node => node.hasAttribute(this.headSelectorAttr));
+    };
+
+    ignoreHeadNode(node) {
+        return !node || node.tagName === 'TITLE' || node.hasAttribute(this.headAnchorAttr);
+    };
+
+    normalizeHeadNode(node) {
+        const clone = node.cloneNode(true);
+        clone.removeAttribute(this.headSelectorAttr);
+        clone.removeAttribute(this.headAnchorAttr);
+        return clone.outerHTML.trim();
+    };
+
+    hash(text = '') {
+        let hash = 0;
+        [...text].forEach(char => {
+            hash = ((hash << 5) - hash) + char.charCodeAt(0);
+            hash |= 0;
+        });
+        return `${hash}`;
+    };
+
+    getHeadNodeKey(node) {
+        const tag = node.tagName.toLowerCase();
+        if ( node.id ) return `${tag}#${node.id}`;
+        if ( tag === 'meta' ) {
+            if ( node.hasAttribute('charset') ) return 'meta:charset';
+            const key = ['name', 'property', 'http-equiv', 'itemprop'].find(name => node.hasAttribute(name));
+            if ( key ) return `meta:${key}:${node.getAttribute(key)}`;
+        }
+        if ( tag === 'link' ) {
+            const rel = node.getAttribute('rel') || '';
+            const href = node.getAttribute('href') || '';
+            if ( href ) return `link:${rel}:${href}`;
+        }
+        if ( tag === 'script' ) {
+            const src = node.getAttribute('src') || '';
+            if ( src ) return `script:${src}`;
+        }
+        if ( tag === 'base' ) {
+            const href = node.getAttribute('href') || '';
+            if ( href ) return `base:${href}`;
+        }
+        const attrs = ['type', 'as', 'media', 'name', 'property', 'http-equiv']
+            .map(name => node.hasAttribute(name) ? `${name}:${node.getAttribute(name)}` : '')
+            .filter(Boolean)
+            .join('|');
+        const content = node.textContent || node.getAttribute('content') || node.getAttribute('href') || '';
+        return `${tag}:${attrs}:${this.hash(content)}`;
+    };
+
+    createHeadNode(node) {
+        if ( node.tagName !== 'SCRIPT' ) return this.markHeadNode(node.cloneNode(true));
+        const script = document.createElement('script');
+        [...node.attributes].forEach(attr => script.setAttribute(attr.name, attr.value));
+        if ( node.textContent ) script.textContent = node.textContent;
+        return this.markHeadNode(script);
+    };
+
+    waitHeadNode(node) {
+        const tag = node.tagName.toLowerCase();
+        if ( tag === 'link' && (node.rel || '').toLowerCase() === 'stylesheet' ) {
+            return new Promise(resolve => {
+                node.addEventListener('load', resolve, { once: true });
+                node.addEventListener('error', resolve, { once: true });
+            });
+        }
+        if ( tag === 'script' && node.src ) {
+            return new Promise(resolve => {
+                node.addEventListener('load', resolve, { once: true });
+                node.addEventListener('error', resolve, { once: true });
+            });
+        }
+        return Promise.resolve();
+    };
+
+    syncHead(head) {
+        if ( !head ) return Promise.resolve();
+        const anchor = this.ensureHeadAnchor();
+        if ( !anchor ) return Promise.resolve();
+        const currentNodes = this.getOwnedHeadNodes();
+        const currentPool = currentNodes.reduce((map, node) => {
+            const key = this.getHeadNodeKey(node);
+            map[key] = map[key] || [];
+            map[key].push({
+                node,
+                fingerprint: this.normalizeHeadNode(node),
+            });
+            return map;
+        }, {});
+        const reused = new Set();
+        const replaceQueue = new Set();
+        const waitTasks = [];
+        const desiredNodes = this.getHeadNodes(head).map(node => {
+            const key = this.getHeadNodeKey(node);
+            const fingerprint = this.normalizeHeadNode(node);
+            const candidates = currentPool[key] || [];
+            const exact = candidates.find(item => !reused.has(item.node) && item.fingerprint === fingerprint);
+            if ( exact ) {
+                reused.add(exact.node);
+                return exact.node;
+            }
+            const stale = candidates.find(item => !reused.has(item.node));
+            if ( stale ) replaceQueue.add(stale.node);
+            const newNode = this.createHeadNode(node);
+            waitTasks.push(this.waitHeadNode(newNode));
+            return newNode;
+        });
+        replaceQueue.forEach(node => node.remove());
+        desiredNodes.forEach(node => document.head.insertBefore(node, anchor));
+        currentNodes.forEach(node => {
+            if ( !reused.has(node) && node.isConnected ) node.remove();
+        });
+        return Promise.all(waitTasks);
+    };
+
     // 事件委托
     delegate(element, eventType, selector, fn) {
         element.addEventListener(eventType, e => {
@@ -90,7 +239,7 @@ class WingPjax {
                     conf.complete().then(els => {
                         document.title = page.title; // 更新标题
                         if ( !back ) history.pushState(null, null, newUrl); // 更新地址栏
-                        return this.display(page, els);
+                        return this.syncHead(page.head).then(() => this.display(page, els));
                     }).then(() => {
                         return conf.after();
                     });
