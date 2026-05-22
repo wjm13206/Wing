@@ -180,10 +180,10 @@ class WingPjax {
         return Promise.resolve();
     };
 
-    syncHead(head) {
-        if ( !head ) return Promise.resolve();
+    async syncHead(head) {
+        if ( !head ) return;
         const anchor = this.ensureHeadAnchor();
-        if ( !anchor ) return Promise.resolve();
+        if ( !anchor ) return;
         const currentNodes = this.getOwnedHeadNodes();
         const currentPool = currentNodes.reduce((map, node) => {
             const key = this.getHeadNodeKey(node);
@@ -195,29 +195,30 @@ class WingPjax {
             return map;
         }, {});
         const reused = new Set();
-        const replaceQueue = new Set();
+        const additions = [];
         const waitTasks = [];
-        const desiredNodes = this.getHeadNodes(head).map(node => {
+        this.getHeadNodes(head).forEach(node => {
             const key = this.getHeadNodeKey(node);
             const fingerprint = this.normalizeHeadNode(node);
             const candidates = currentPool[key] || [];
             const exact = candidates.find(item => !reused.has(item.node) && item.fingerprint === fingerprint);
             if ( exact ) {
+                // 完全匹配：保持节点原位，避免重排和样式闪烁
                 reused.add(exact.node);
-                return exact.node;
+                return;
             }
-            const stale = candidates.find(item => !reused.has(item.node));
-            if ( stale ) replaceQueue.add(stale.node);
             const newNode = this.createHeadNode(node);
+            additions.push(newNode);
             waitTasks.push(this.waitHeadNode(newNode));
-            return newNode;
         });
-        replaceQueue.forEach(node => node.remove());
-        desiredNodes.forEach(node => document.head.insertBefore(node, anchor));
-        currentNodes.forEach(node => {
-            if ( !reused.has(node) && node.isConnected ) node.remove();
+        // 先插入新节点开始加载，旧节点仍保留在 DOM 中以维持当前样式
+        additions.forEach(node => document.head.insertBefore(node, anchor));
+        const removals = currentNodes.filter(node => !reused.has(node));
+        // 等待新样式/脚本加载完成后，再移除被淘汰的旧节点，防止过渡期间出现无样式状态
+        await Promise.all(waitTasks);
+        removals.forEach(node => {
+            if ( node.isConnected ) node.remove();
         });
-        return Promise.all(waitTasks);
     };
 
     // 事件委托
