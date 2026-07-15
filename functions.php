@@ -43,7 +43,7 @@ function biji_enqueue_scripts() {
     wp_enqueue_script( 'language', get_template_directory_uri() . '/static/lang.js', [], THEME_VERSION, false );
     wp_enqueue_script( 'modules', get_template_directory_uri() . '/static/modules.js', [], THEME_VERSION, true );
     wp_enqueue_script( 'script', get_template_directory_uri() . '/static/script.js', [], THEME_VERSION, true );
-    $avatar_url = parse_url( get_avatar_url( null ) );
+    $avatar_url = wp_parse_url( get_avatar_url( null ) );
     wp_localize_script( 'helper', 'BaseData', [
         'origin' => site_url(),
         'avatar' => "//" . $avatar_url["host"],

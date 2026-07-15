@@ -46,7 +46,7 @@ add_filter( 'preprocess_comment', 'scp_comment_post' );
 // Gravatar头像使用镜像服务器
 function biji_replace_avatar( $avatar ) {
     if ( get_theme_mod( 'biji_setting_avatar' ) ) {
-        $cdn    = parse_url( get_theme_mod( 'biji_setting_avatar' ) );
+        $cdn    = wp_parse_url( get_theme_mod( 'biji_setting_avatar' ) );
         $host   = $cdn["host"];
         $avatar = preg_replace( "/\/\/(.*?).gravatar.com/", "//$host", $avatar );
     }
